@@ -10,6 +10,7 @@
   "scripts": {
     "start": "tsc && node dist/index.js",
     "dev": "nodemon --exec \"npm run start\" --ext ts --watch src",
+    "build": "tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
