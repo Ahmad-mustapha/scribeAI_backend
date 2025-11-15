@@ -168,7 +168,7 @@ app.post("/start-ai-agent", async (req: Request, res: Response) => {
 /**
  * Handle the request to stop the AI Agent
  */
-app.post("/stop-ai-agent", async (req, res) => {
+app.post("/stop-ai-agent", async (req: Request, res: Response) => {
   const { channel_id } = req.body;
   console.log(`[API] /stop-ai-agent called for channel: ${channel_id}`);
   const user_id = `ai-bot-${channel_id.replace(/[!]/g, "")}`;
@@ -191,7 +191,7 @@ app.post("/stop-ai-agent", async (req, res) => {
   }
 });
 
-app.get("/agent-status", (req, res) => {
+app.get("/agent-status", (req: Request, res: Response) => {
   const { channel_id } = req.query;
   if (!channel_id || typeof channel_id !== "string") {
     return res.status(400).json({ error: "Missing channel_id" });
