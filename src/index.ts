@@ -30,7 +30,7 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 
 app.use(
   cors({
-    origin: (origin, callback) => {
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       if (allowedOrigins.includes("*") || !origin || allowedOrigins.includes(origin)) {
         callback(null, true);
       } else {
@@ -40,6 +40,7 @@ app.use(
     credentials: true,
   })
 );
+
 
 // Response compression for better performance
 app.use(compression());
@@ -58,7 +59,7 @@ const limiter = rateLimit({
 });
 
 // Apply rate limiting to all routes except health check
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   if (req.path === "/health" || req.path === "/") {
     return next();
   }
@@ -85,7 +86,7 @@ setInterval(async () => {
 }, 5000);
 
 // Health check endpoint
-app.get("/health", (req, res) => {
+app.get("/health", (req: Request, res: Response) => {
   res.status(200).json({
     status: "healthy",
     timestamp: new Date().toISOString(),
@@ -96,7 +97,7 @@ app.get("/health", (req, res) => {
 });
 
 // Root endpoint
-app.get("/", (req, res) => {
+app.get("/", (req: Request, res: Response) => {
   res.json({
     message: "AI Writing Assistant Server is running",
     apiKey: apiKey,
@@ -107,7 +108,7 @@ app.get("/", (req, res) => {
 /**
  * Handle the request to start the AI Agent
  */
-app.post("/start-ai-agent", async (req, res) => {
+app.post("/start-ai-agent", async (req: Request, res: Response) => {
   const { channel_id, channel_type = "messaging" } = req.body;
   console.log(`[API] /start-ai-agent called for channel: ${channel_id}`);
 
@@ -213,7 +214,7 @@ app.get("/agent-status", (req, res) => {
 });
 
 // Token provider endpoint - generates secure tokens
-app.post("/token", async (req, res) => {
+app.post("/token", async (req: Request, res: Response) => {
   try {
     const { userId } = req.body;
 
@@ -251,10 +252,10 @@ async function disposeAiAgent(aiAgent: AIAgent) {
 // Centralized error handling middleware
 app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
   console.error("[Error Handler]", err.message, err.stack);
-  
+
   // Don't leak error details in production
   const isDevelopment = process.env.NODE_ENV !== "production";
-  
+
   res.status(500).json({
     error: "Internal server error",
     ...(isDevelopment && { message: err.message, stack: err.stack }),
@@ -273,14 +274,14 @@ function validateEnvironment() {
     "STREAM_API_SECRET",
     "API_KEY", // Gemini API key
   ];
-  
+
   const missing = required.filter((key) => !process.env[key]);
-  
+
   if (missing.length > 0) {
     console.error("❌ Missing required environment variables:", missing.join(", "));
     process.exit(1);
   }
-  
+
   console.log("✅ Environment variables validated");
 }
 
@@ -293,15 +294,15 @@ async function gracefulShutdown(signal: string) {
     return;
   }
   isShuttingDown = true;
-  
+
   console.log(`\n${signal} received. Starting graceful shutdown...`);
-  
+
   // Set a timeout to force exit if shutdown takes too long
   const shutdownTimeout = setTimeout(() => {
     console.error("Forced shutdown after timeout");
     process.exit(1);
   }, 30000); // 30 seconds
-  
+
   try {
     // Stop accepting new connections
     if (server) {
@@ -309,7 +310,7 @@ async function gracefulShutdown(signal: string) {
         console.log("HTTP server closed");
       });
     }
-    
+
     // Dispose all active agents
     if (aiAgentCache.size > 0) {
       console.log(`Disposing ${aiAgentCache.size} active agents...`);
@@ -318,14 +319,14 @@ async function gracefulShutdown(signal: string) {
           console.error("Error disposing agent:", err);
         })
       );
-      
+
       await Promise.all(disposePromises);
       aiAgentCache.clear();
     }
-    
+
     // Close database connections if any
     // (Add your database cleanup here if needed)
-    
+
     clearTimeout(shutdownTimeout);
     console.log("Graceful shutdown complete");
     process.exit(0);
