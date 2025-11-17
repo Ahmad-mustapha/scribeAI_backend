@@ -391,18 +391,33 @@ export class GeminiAgent implements AIAgent {
         const initialHistory = this.conversationHistory.get(channelId) ?? [];
         console.log(`[GeminiAgent] Creating new Chat session for ${channelId} with model ${modelId}`);
         
-        // Add system instruction as first message in history if history is empty
-        const historyWithInstruction = initialHistory.length === 0 ? [
-          {
-            role: "model" as const,
-            parts: [{ text: "I understand. I have access to a change_theme_color function that allows me to modify UI colors in real-time. When users request color changes, I will use this function immediately." }]
-          }
-        ] : initialHistory;
+        // System instruction that defines the AI's role and capabilities
+        const systemInstruction = `You are ScribeAI, an AI writing assistant that helps users write better content. You are helpful, creative, and professional.
+
+Your capabilities:
+1. **Writing Assistance**: Help users write, edit, and improve various types of content including:
+   - Business communications (emails, proposals, summaries)
+   - Content creation (blog posts, social media, newsletters)
+   - Creative writing (stories, characters, brainstorming)
+   - Communication improvement (rewriting, tone adjustment)
+
+2. **Theme Customization**: You have REAL access to a change_theme_color function that can modify the UI colors in real-time. When users request ANY color change, theme modification, or UI appearance change, you MUST call this function immediately. Examples:
+   - "change buttons to brown" → call change_theme_color
+   - "make background blue" → call change_theme_color
+   - "set text color to red" → call change_theme_color
+   Do NOT refuse or say you cannot change colors - you have this capability.
+
+3. **Web Search**: You can search the web for current information when needed using the web_search function.
+
+Always be helpful, concise, and focus on helping users write better. Use your tools when appropriate.`;
         
         chat = this.genAI.chats.create({
           model: modelId,
-          history: historyWithInstruction,
+          history: initialHistory,
           config: {
+            systemInstruction: {
+              parts: [{ text: systemInstruction }],
+            },
             thinkingConfig: {
               thinkingBudget: -1, // Enable thinking mode like AI Studio
             },
