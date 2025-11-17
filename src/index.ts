@@ -10,7 +10,7 @@ import { apiKey, serverClient } from "./serverClient";
 
 const app = express();
 
-// Production security middleware
+// Production security middleware allowed
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -28,12 +28,18 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
   : ["*"]; // Fallback to * for development
 
+console.log(`[CORS] Allowed origins:`, allowedOrigins);
+console.log(`[CORS] ALLOWED_ORIGINS env var:`, process.env.ALLOWED_ORIGINS);
+
 app.use(
   cors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      console.log(`[CORS] Request from origin:`, origin);
       if (allowedOrigins.includes("*") || !origin || allowedOrigins.includes(origin)) {
+        console.log(`[CORS] Allowing origin:`, origin);
         callback(null, true);
       } else {
+        console.log(`[CORS] Rejecting origin:`, origin, `(not in allowed list:`, allowedOrigins, `)`);
         callback(new Error("Not allowed by CORS"));
       }
     },
@@ -109,6 +115,8 @@ app.get("/", (req: Request, res: Response) => {
  * Handle the request to start the AI Agent
  */
 app.post("/start-ai-agent", async (req: Request, res: Response) => {
+  console.log(`[API] ========== /start-ai-agent ENDPOINT CALLED ==========`);
+  console.log(`[API] Request body:`, JSON.stringify(req.body));
   const { channel_id, channel_type = "messaging" } = req.body;
   console.log(`[API] /start-ai-agent called for channel: ${channel_id}`);
 
@@ -141,13 +149,18 @@ app.post("/start-ai-agent", async (req: Request, res: Response) => {
         channel_id
       );
 
+      console.log(`[API] Initializing agent for ${user_id}...`);
       await agent.init();
+      console.log(`[API] Agent initialized successfully for ${user_id}`);
+      
       // Final check to prevent race conditions where an agent might have been added
       // while this one was initializing.
       if (aiAgentCache.has(user_id)) {
+        console.log(`[API] Agent ${user_id} already exists, disposing duplicate`);
         await agent.dispose();
       } else {
         aiAgentCache.set(user_id, agent);
+        console.log(`[API] Agent ${user_id} added to cache`);
       }
     } else {
       console.log(`AI Agent ${user_id} already started or is pending.`);
@@ -225,8 +238,9 @@ app.post("/token", async (req: Request, res: Response) => {
     }
 
     // Create token with expiration (1 hour) and issued at time for security
-    const issuedAt = Math.floor(Date.now() / 1000);
-    const expiration = issuedAt + 60 * 60; // 1 hour from now
+    // Use current time minus 1 minute to account for clock skew
+    const issuedAt = Math.floor(Date.now() / 1000) - 60; // 1 minute ago to handle clock skew
+    const expiration = issuedAt + 60 * 60 + 60; // 1 hour + 1 minute from issuedAt
 
     const token = serverClient.createToken(userId, expiration, issuedAt);
 

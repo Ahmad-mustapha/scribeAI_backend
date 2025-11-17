@@ -74,6 +74,32 @@ export class GeminiAgent implements AIAgent {
             required: ["query"],
           },
         },
+        {
+          name: "change_theme_color",
+          description:
+            "CRITICAL: This function is REAL and WORKING. You MUST call this function whenever a user requests ANY color change, theme change, or UI appearance modification. This function directly modifies CSS variables in the running application. Examples that REQUIRE this function: 'change buttons to brown', 'make background blue', 'change text to red', 'set buttons color to #FF5733', 'make borders navy', 'change card color to green'. You have this capability - do NOT refuse or say you cannot change colors. Always call this function for color/theme requests.",
+          parameters: {
+            type: Type.OBJECT,
+            properties: {
+              element: {
+                type: Type.STRING,
+                description:
+                  "The UI element to change. Common values: 'buttons' or 'button' (for primary buttons), 'background' or 'bg' (for page background), 'text' or 'foreground' (for text color), 'borders' (for border colors), 'cards' (for card backgrounds), 'primary', 'secondary', 'muted', 'accent', 'input', 'ring', 'destructive', 'popover'. Extract the element name from the user's request.",
+              },
+              color: {
+                type: Type.STRING,
+                description:
+                  "The color value from the user's request. Accepts: color names (e.g., 'brown', 'navy blue', 'light green', 'dark red'), hex codes (e.g., '#FF5733', '#brown'), RGB (e.g., 'rgb(255,87,51)' or '255, 87, 51'), or HSL (e.g., 'hsl(9,100%,60%)' or '9 100% 60%'). Use exactly what the user specified or a close match.",
+              },
+              description: {
+                type: Type.STRING,
+                description:
+                  "A clear description of the change being made, based on the user's request (e.g., 'Change all buttons to brown color', 'Set background to navy blue').",
+              },
+            },
+            required: ["element", "color", "description"],
+          },
+        },
       ] as any,
     },
   ] as any;
@@ -119,7 +145,11 @@ export class GeminiAgent implements AIAgent {
       this.startKeepAlive();
 
       // Subscribe to message events
-      this.chatClient.on("message.new", this.handleMessage);
+      console.log(`[GeminiAgent] Registering message.new event handler for channel ${this.channel.id}`);
+      this.chatClient.on("message.new", (event) => {
+        console.log(`[GeminiAgent] message.new event received!`);
+        this.handleMessage(event);
+      });
       
       console.log(`[GeminiAgent] Successfully initialized for channel ${this.channel.id}`);
     } catch (error) {
@@ -188,11 +218,11 @@ export class GeminiAgent implements AIAgent {
         return;
       }
 
-      // Check if connection is active by verifying user is set
-      if (this.chatClient.userID === user.id) {
+      // Check if client is still connected before using channel
+      if (this.chatClient.userID === user.id && this.chatClient.wsConnection) {
         // Try to verify connection is working by re-watching the channel
         try {
-          // Try re-watching first (lightweight operation)process
+          // Try re-watching first (lightweight operation)
           console.log(`[GeminiAgent] Verifying connection by re-watching channel...`);
           await this.channel.watch();
           this.lastWatchTime = Date.now();
@@ -200,9 +230,13 @@ export class GeminiAgent implements AIAgent {
           this.lastInteractionTs = Date.now();
           console.log(`[GeminiAgent] Connection verified, channel re-watched successfully`);
           return;
-        } catch (watchError) {
+        } catch (watchError: any) {
           // Re-watch failed, connection might be dead, proceed with full reconnect
-          console.warn(`[GeminiAgent] Re-watch failed, connection might be dead, proceeding with full reconnect:`, watchError);
+          if (watchError?.message?.includes("disconnect")) {
+            console.warn(`[GeminiAgent] Client disconnected, proceeding with full reconnect`);
+          } else {
+            console.warn(`[GeminiAgent] Re-watch failed, proceeding with full reconnect:`, watchError);
+          }
         }
       }
 
@@ -210,14 +244,26 @@ export class GeminiAgent implements AIAgent {
       const { serverClient } = await import("../../serverClient");
       const token = serverClient.createToken(user.id);
 
+      // Reconnect the client
       await this.chatClient.connectUser({ id: user.id }, token);
 
-      // Re-watch the channel
-      await this.channel.watch();
+      // Wait a bit for connection to stabilize
+      await this.delay(100);
 
-      console.log(`[GeminiAgent] Successfully reconnected for ${user.id}`);
-      this.reconnectAttempts = 0;
-      this.lastInteractionTs = Date.now();
+      // Re-watch the channel only if client is connected
+      if (this.chatClient.userID && this.chatClient.wsConnection) {
+        try {
+          await this.channel.watch();
+          console.log(`[GeminiAgent] Successfully reconnected for ${user.id}`);
+          this.reconnectAttempts = 0;
+          this.lastInteractionTs = Date.now();
+        } catch (channelError: any) {
+          console.error(`[GeminiAgent] Failed to re-watch channel after reconnect:`, channelError);
+          // Don't throw - connection is restored, channel watch might work on next message
+        }
+      } else {
+        console.warn(`[GeminiAgent] Client not fully connected after reconnect attempt`);
+      }
     } catch (error) {
       console.error(`[GeminiAgent] Reconnection failed:`, error);
       // Will retry on next connection.changed event
@@ -345,9 +391,17 @@ export class GeminiAgent implements AIAgent {
         const initialHistory = this.conversationHistory.get(channelId) ?? [];
         console.log(`[GeminiAgent] Creating new Chat session for ${channelId} with model ${modelId}`);
         
+        // Add system instruction as first message in history if history is empty
+        const historyWithInstruction = initialHistory.length === 0 ? [
+          {
+            role: "model" as const,
+            parts: [{ text: "I understand. I have access to a change_theme_color function that allows me to modify UI colors in real-time. When users request color changes, I will use this function immediately." }]
+          }
+        ] : initialHistory;
+        
         chat = this.genAI.chats.create({
           model: modelId,
-          history: initialHistory,
+          history: historyWithInstruction,
           config: {
             thinkingConfig: {
               thinkingBudget: -1, // Enable thinking mode like AI Studio
@@ -373,16 +427,187 @@ export class GeminiAgent implements AIAgent {
   }
 
   /**
+   * Detect and execute theme changes directly from user messages
+   * This bypasses the AI's decision-making for more reliable theme changes
+   */
+  private detectAndExecuteThemeChange = async (userMessage: string): Promise<{ cssVariable: string; color: string; element: string } | null> => {
+    const lowerMessage = userMessage.toLowerCase();
+    
+    console.log(`[GeminiAgent] Checking message for theme change: "${userMessage}"`);
+    
+    // More flexible detection - check for action words + UI elements OR color words
+    const actionWords = ['change', 'make', 'set', 'update', 'switch', 'turn'];
+    const uiElements = ['button', 'background', 'text', 'border', 'card', 'color', 'colour', 'theme'];
+    const colorWords = ['brown', 'blue', 'red', 'green', 'yellow', 'orange', 'purple', 'pink', 'navy', 'black', 'white', 'gray', 'grey', 'teal', 'cyan', 'magenta', 'lime', 'maroon', 'olive', 'silver', 'gold'];
+    
+    const hasAction = actionWords.some(word => lowerMessage.includes(word));
+    const hasUIElement = uiElements.some(word => lowerMessage.includes(word));
+    const hasColor = colorWords.some(word => lowerMessage.includes(word));
+    
+    // Theme request if: (action + UI element) OR (action + color) OR (UI element + color)
+    const hasThemeRequest = (hasAction && hasUIElement) || (hasAction && hasColor) || (hasUIElement && hasColor);
+    
+    if (!hasThemeRequest) {
+      console.log(`[GeminiAgent] No theme request detected`);
+      return null;
+    }
+    
+    console.log(`[GeminiAgent] Theme request detected!`);
+    
+    // Element mapping
+    const elementToVariable: Record<string, string> = {
+      button: "--primary",
+      buttons: "--primary",
+      "primary button": "--primary",
+      "primary buttons": "--primary",
+      primary: "--primary",
+      background: "--background",
+      bg: "--background",
+      "page background": "--background",
+      text: "--foreground",
+      foreground: "--foreground",
+      "font color": "--foreground",
+      border: "--border",
+      borders: "--border",
+      card: "--card",
+      cards: "--card",
+      secondary: "--secondary",
+      "secondary button": "--secondary",
+      "secondary buttons": "--secondary",
+      muted: "--muted",
+      "muted elements": "--muted",
+      accent: "--accent",
+      "accent color": "--accent",
+      input: "--input",
+      "input fields": "--input",
+      "input field": "--input",
+      ring: "--ring",
+      "focus ring": "--ring",
+      destructive: "--destructive",
+      error: "--destructive",
+      danger: "--destructive",
+      popover: "--popover",
+    };
+    
+    // Extract element name
+    let detectedElement = "";
+    let detectedColor = "";
+    
+    // Try to find element in message - prioritize longer matches first
+    const sortedKeys = Object.keys(elementToVariable).sort((a, b) => b.length - a.length);
+    for (const key of sortedKeys) {
+      if (lowerMessage.includes(key)) {
+        detectedElement = key;
+        console.log(`[GeminiAgent] Found element match: "${key}"`);
+        break;
+      }
+    }
+    
+    // If no exact match, try partial matches
+    if (!detectedElement) {
+      const partialMatch = sortedKeys.find((key) =>
+        lowerMessage.includes(key.split(' ')[0]) // Match first word
+      );
+      if (partialMatch) {
+        detectedElement = partialMatch;
+        console.log(`[GeminiAgent] Found partial element match: "${partialMatch}"`);
+      }
+    }
+    
+    // Default to buttons if no element found but has color request
+    if (!detectedElement && hasThemeRequest) {
+      detectedElement = "buttons";
+      console.log(`[GeminiAgent] Defaulting to buttons`);
+    }
+    
+    // Extract color from message - simpler approach
+    // First, try to find color words directly in the message
+    const allColorWords = ['brown', 'blue', 'red', 'green', 'yellow', 'orange', 'purple', 'pink', 'navy', 'black', 'white', 'gray', 'grey', 'teal', 'cyan', 'magenta', 'lime', 'maroon', 'olive', 'silver', 'gold', 'light blue', 'dark blue', 'light green', 'dark green', 'light red', 'dark red'];
+    
+    // Sort by length (longest first) to match "light blue" before "blue"
+    const sortedColorWords = allColorWords.sort((a, b) => b.length - a.length);
+    
+    for (const colorWord of sortedColorWords) {
+      if (lowerMessage.includes(colorWord) && !elementToVariable[colorWord]) {
+        detectedColor = colorWord;
+        console.log(`[GeminiAgent] Found color word: "${colorWord}"`);
+        break;
+      }
+    }
+    
+    // If still no color, try regex patterns for hex, RGB, HSL
+    if (!detectedColor) {
+      const colorPatterns = [
+        /#([0-9A-Fa-f]{3,6})\b/i, // Hex codes
+        /rgb\(([^)]+)\)/i, // RGB
+        /hsl\(([^)]+)\)/i, // HSL
+      ];
+      
+      for (const pattern of colorPatterns) {
+        const match = userMessage.match(pattern);
+        if (match && match[1]) {
+          detectedColor = match[1].trim();
+          console.log(`[GeminiAgent] Found color via pattern: "${detectedColor}"`);
+          break;
+        }
+      }
+    }
+    
+    console.log(`[GeminiAgent] Detected element: "${detectedElement}", color: "${detectedColor}"`);
+    
+    // If we have both element and color, execute the change
+    if (detectedElement && detectedColor) {
+      const cssVariable = elementToVariable[detectedElement] || "--primary";
+      
+      console.log(`[GeminiAgent] Executing theme change: ${cssVariable} = ${detectedColor}`);
+      
+      try {
+        // Send theme change message directly
+        await this.channel.sendMessage({
+          text: `Theme update: Changed ${detectedElement} to ${detectedColor}`,
+          custom: {
+            messageType: "theme_change",
+            cssVariable,
+            color: detectedColor,
+            element: detectedElement,
+            description: `Changed ${detectedElement} to ${detectedColor}`,
+          },
+        });
+        
+        console.log(`[GeminiAgent] Successfully sent theme change message`);
+        return { cssVariable, color: detectedColor, element: detectedElement };
+      } catch (error) {
+        console.error(`[GeminiAgent] Failed to send theme change message:`, error);
+        return null;
+      }
+    }
+    
+    console.log(`[GeminiAgent] Missing element or color - element: ${detectedElement}, color: ${detectedColor}`);
+    return null;
+  };
+
+  /**
    * Handle an incoming chat message and generate an AI reply
    */
   private handleMessage = async (event: any) => {
+    console.log(`[GeminiAgent] handleMessage called with event:`, event?.channel_id, event?.message?.text);
     try {
-      if (!event || event.channel_id !== this.channel.id) return;
+      if (!event || event.channel_id !== this.channel.id) {
+        console.log(`[GeminiAgent] Early return: event check failed`);
+        return;
+      }
 
       const msg = event.message;
-      if (!msg || !msg.text) return;
-      if (msg.user?.id === this.user?.id) return; // Don't reply to self or other agent messages
+      if (!msg || !msg.text) {
+        console.log(`[GeminiAgent] Early return: no message or text`);
+        return;
+      }
+      if (msg.user?.id === this.user?.id) {
+        console.log(`[GeminiAgent] Early return: message from self (${msg.user?.id} === ${this.user?.id})`);
+        return; // Don't reply to self or other agent messages
+      }
 
+      console.log(`[GeminiAgent] Processing message from user: ${msg.user?.id}, text: "${msg.text}"`);
       this.lastInteractionTs = Date.now();
 
       // Send a pending message in Stream Chat
@@ -391,7 +616,19 @@ export class GeminiAgent implements AIAgent {
         custom: { messageType: "ai_response" },
       });
 
-      const userMessageText = String(msg.text);
+      let userMessageText = String(msg.text);
+      
+      console.log(`[GeminiAgent] Processing user message: "${userMessageText}"`);
+      
+      // Direct theme change detection and execution (bypasses AI decision)
+      const themeChangeResult = await this.detectAndExecuteThemeChange(userMessageText);
+      if (themeChangeResult) {
+        // Theme change was applied directly, continue with normal AI response
+        console.log(`[GeminiAgent] Applied theme change directly: ${themeChangeResult.cssVariable} = ${themeChangeResult.color}`);
+      } else {
+        console.log(`[GeminiAgent] No theme change detected or executed`);
+      }
+      
       const desiredModelId = this.pickModelForUser(msg.user?.id);
       const chat = await this.getOrCreateChatSession(event.channel_id, desiredModelId);
 
@@ -477,6 +714,117 @@ export class GeminiAgent implements AIAgent {
                     // For now, we'll break and let the outer loop handle it
                     // This is a simplified approach - you may want to handle this recursively
                     console.warn(`[GeminiAgent] Nested function call detected in tool response - this may need special handling`);
+                  }
+                }
+              } else if (fc.name === "change_theme_color") {
+                const argObject = fc.args as Record<string, unknown>;
+                const element = String(argObject?.element ?? "").toLowerCase();
+                const color = String(argObject?.color ?? "");
+                const description = String(argObject?.description ?? "");
+                
+                console.log(`[GeminiAgent] Changing theme color: ${element} to ${color}`);
+                
+                // Map element names to CSS variables
+                const elementToVariable: Record<string, string> = {
+                  button: "--primary",
+                  buttons: "--primary",
+                  "primary button": "--primary",
+                  "primary buttons": "--primary",
+                  primary: "--primary",
+                  background: "--background",
+                  bg: "--background",
+                  "page background": "--background",
+                  text: "--foreground",
+                  foreground: "--foreground",
+                  "font color": "--foreground",
+                  border: "--border",
+                  borders: "--border",
+                  card: "--card",
+                  cards: "--card",
+                  secondary: "--secondary",
+                  "secondary button": "--secondary",
+                  "secondary buttons": "--secondary",
+                  muted: "--muted",
+                  "muted elements": "--muted",
+                  accent: "--accent",
+                  "accent color": "--accent",
+                  input: "--input",
+                  "input fields": "--input",
+                  "input field": "--input",
+                  ring: "--ring",
+                  "focus ring": "--ring",
+                  destructive: "--destructive",
+                  error: "--destructive",
+                  danger: "--destructive",
+                  popover: "--popover",
+                };
+                
+                // Find matching CSS variable
+                let cssVariable = elementToVariable[element];
+                if (!cssVariable) {
+                  // Try partial match
+                  const partialMatch = Object.keys(elementToVariable).find((key) =>
+                    element.includes(key) || key.includes(element)
+                  );
+                  cssVariable = partialMatch ? elementToVariable[partialMatch] ?? "" : "";
+                }
+                
+                if (!cssVariable) {
+                  // Default to primary if no match
+                  cssVariable = "--primary";
+                  console.warn(`[GeminiAgent] Unknown element "${element}", defaulting to --primary`);
+                }
+                
+                // Send a special message with theme change data
+                const themeChangeMessage = await this.channel.sendMessage({
+                  text: `Theme update: ${description}`,
+                  custom: {
+                    messageType: "theme_change",
+                    cssVariable,
+                    color,
+                    element,
+                    description,
+                  },
+                });
+                
+                console.log(`[GeminiAgent] Sent theme change message: ${cssVariable} = ${color}`);
+                
+                // Return success response to the model
+                const toolResponsePart = {
+                  functionResponse: {
+                    name: "change_theme_color",
+                    response: {
+                      success: true,
+                      cssVariable,
+                      color,
+                      element,
+                      message: `Successfully changed ${element} color to ${color}`,
+                    },
+                    id: fc.id,
+                  },
+                };
+                
+                const toolResponseStream = await this.performWithRetry<AsyncGenerator<GenerateContentResponse>>(
+                  desiredModelId,
+                  () => chat.sendMessageStream({
+                    message: [{
+                      functionResponse: toolResponsePart.functionResponse
+                    }]
+                  })
+                );
+                
+                // Process the tool response stream
+                for await (const toolChunk of toolResponseStream) {
+                  if (toolChunk.text) {
+                    assistantResponseBuffer += toolChunk.text;
+                    if (Date.now() - lastUpdate > 250) {
+                      await updateStreamChatMessage(false);
+                      lastUpdate = Date.now();
+                    }
+                  }
+                  
+                  if (toolChunk.functionCalls && toolChunk.functionCalls.length > 0) {
+                    console.warn(`[GeminiAgent] Nested function call detected in theme change response`);
                   }
                 }
               }
