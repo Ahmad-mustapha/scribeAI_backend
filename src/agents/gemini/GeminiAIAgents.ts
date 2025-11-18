@@ -392,7 +392,7 @@ export class GeminiAgent implements AIAgent {
         console.log(`[GeminiAgent] Creating new Chat session for ${channelId} with model ${modelId}`);
         
         // System instruction that defines the AI's role and capabilities
-        const systemInstruction = `You are ScribeAI, an AI writing assistant that helps users write better content. You are helpful, creative, and professional.
+        const systemInstruction = `You are Chromi, an AI writing assistant that helps users write better content. You are helpful, creative, and professional.
 
 Your capabilities:
 1. **Writing Assistance**: Help users write, edit, and improve various types of content including:
