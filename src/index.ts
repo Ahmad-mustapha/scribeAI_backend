@@ -20,10 +20,16 @@ app.use(helmet({
       imgSrc: ["'self'", "data:", "https:"],
     },
   },
-  crossOriginEmbedderPolicy: false, // Allow Stream Chat iframes
+  crossOriginEmbedderPolicy: false, 
+  // CRITICAL FIX: Allow resources to be loaded cross-origin.
+  // Without this, Helmet defaults to "same-origin", which overrides CORS headers
+  // and causes the browser to block the response.
+  crossOriginResourcePolicy: { policy: "cross-origin" },
 }));
 
-// CORS configuration - allow specific origins in production
+// ==========================================
+// CORS CONFIGURATION
+// ==========================================
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
   : ["*"]; // Fallback to * for development
@@ -34,23 +40,33 @@ if (!allowedOrigins.includes("*") && !allowedOrigins.includes("https://chromiai.
 }
 
 console.log(`[CORS] Allowed origins:`, allowedOrigins);
-console.log(`[CORS] ALLOWED_ORIGINS env var:`, process.env.ALLOWED_ORIGINS);
 
-app.use(
-  cors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      console.log(`[CORS] Request from origin:`, origin);
-      if (allowedOrigins.includes("*") || !origin || allowedOrigins.includes(origin)) {
-        console.log(`[CORS] Allowing origin:`, origin);
-        callback(null, true);
-      } else {
-        console.log(`[CORS] Rejecting origin:`, origin, `(not in allowed list:`, allowedOrigins, `)`);
-        callback(new Error("Not allowed by CORS"));
-      }
-    },
-    credentials: true,
-  })
-);
+const corsOptions = {
+  origin: (origin: string | undefined, callback: (err: Error | null, allow: boolean) => void) => {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) {
+      return callback(null, true);
+    }
+    
+    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    console.log(`[CORS] Rejecting origin:`, origin);
+    return callback(new Error("Not allowed by CORS"), false);
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+};
+
+// Apply CORS middleware
+app.use(cors(corsOptions));
+
+// CRITICAL FIX: Handle preflight requests explicitly for all routes.
+// This ensures OPTIONS requests respond with 200 OK + CORS headers immediately,
+// preventing "Failed to fetch" errors when custom headers (like Auth) are present.
+app.options("*", cors(corsOptions));
 
 
 // Response compression for better performance
