@@ -10,19 +10,13 @@ import { apiKey, serverClient } from "./serverClient";
 
 const app = express();
 
-// Production security middleware allowed
+// Production security middleware
+// Note: CSP directives are for frontend, not backend CORS
 app.use(
   helmet({
-    contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'", "https://chromiai.com", "https://scribe-ai-coral.vercel.app"],
-        connectSrc: ["'self'", "https://chromiai.com", "https://scribe-ai-coral.vercel.app"],
-        styleSrc: ["'self'", "'unsafe-inline'"],
-        scriptSrc: ["'self'"],
-        imgSrc: ["'self'", "data:", "https:"],
-      },
-    },
-    crossOriginEmbedderPolicy: false,
+    contentSecurityPolicy: false, // Disable CSP for API server (CSP is for frontend)
+    crossOriginEmbedderPolicy: false, // Allow Stream Chat iframes
+    crossOriginResourcePolicy: { policy: "cross-origin" }, // Allow cross-origin requests
   })
 );
 
@@ -55,10 +49,19 @@ app.use(
         console.log(`[CORS] Request with no origin header (likely from Postman/curl/server-to-server)`);
       }
       
+      // Normalize origin (remove trailing slash, handle case)
+      const normalizedOrigin = origin ? origin.toLowerCase().replace(/\/$/, "") : undefined;
+      const normalizedAllowedOrigins = allowedOrigins.map(o => o.toLowerCase().replace(/\/$/, ""));
+      
       // Allow requests with no origin (Postman, curl, server-to-server, same-origin)
       // Browsers will always send Origin header for cross-origin requests
       // Server-to-server requests don't need CORS, so undefined origin is safe
-      if (allowedOrigins.includes("*") || !origin || allowedOrigins.includes(origin)) {
+      if (
+        allowedOrigins.includes("*") || 
+        !origin || 
+        allowedOrigins.includes(origin) ||
+        (normalizedOrigin && normalizedAllowedOrigins.includes(normalizedOrigin))
+      ) {
         if (origin) {
           console.log(`[CORS] ✅ Allowing origin:`, origin);
         } else {
@@ -71,9 +74,27 @@ app.use(
       }
     },
     credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+    allowedHeaders: [
+      "Content-Type",
+      "Authorization",
+      "X-Requested-With",
+      "Accept",
+      "Origin",
+      "Access-Control-Request-Method",
+      "Access-Control-Request-Headers",
+    ],
+    exposedHeaders: ["Content-Length", "Content-Type"],
+    maxAge: 86400, // 24 hours
+    preflightContinue: false,
+    optionsSuccessStatus: 204,
   })
 );
 
+// Explicitly handle OPTIONS preflight requests (additional safety)
+app.options("*", (req: Request, res: Response) => {
+  res.status(204).end();
+});
 
 // Response compression for better performance
 app.use(compression());
