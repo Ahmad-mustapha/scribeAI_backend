@@ -28,6 +28,11 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
   : ["*"]; // Fallback to * for development
 
+// Always include chromiai.com in allowed origins
+if (!allowedOrigins.includes("*") && !allowedOrigins.includes("https://chromiai.com")) {
+  allowedOrigins.push("https://chromiai.com");
+}
+
 console.log(`[CORS] Allowed origins:`, allowedOrigins);
 console.log(`[CORS] ALLOWED_ORIGINS env var:`, process.env.ALLOWED_ORIGINS);
 
