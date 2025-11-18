@@ -11,17 +11,21 @@ import { apiKey, serverClient } from "./serverClient";
 const app = express();
 
 // Production security middleware allowed
-app.use(helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
-      scriptSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'", "https://chromiai.com", "https://scribe-ai-coral.vercel.app"],
+        connectSrc: ["'self'", "https://chromiai.com", "https://scribe-ai-coral.vercel.app"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"],
+      },
     },
-  },
-  crossOriginEmbedderPolicy: false, // Allow Stream Chat iframes
-}));
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
 
 // CORS configuration - allow specific origins in production
 const allowedOrigins = process.env.ALLOWED_ORIGINS
