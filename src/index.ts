@@ -28,9 +28,14 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
   : ["*"]; // Fallback to * for development
 
-// Always include chromiai.com in allowed origins
-if (!allowedOrigins.includes("*") && !allowedOrigins.includes("https://chromiai.com")) {
-  allowedOrigins.push("https://chromiai.com");
+// Always include chromiai.com and scribe-ai-coral.vercel.app in allowed origins
+if (!allowedOrigins.includes("*")) {
+  if (!allowedOrigins.includes("https://chromiai.com")) {
+    allowedOrigins.push("https://chromiai.com");
+  }
+  if (!allowedOrigins.includes("https://scribe-ai-coral.vercel.app")) {
+    allowedOrigins.push("https://scribe-ai-coral.vercel.app");
+  }
 }
 
 console.log(`[CORS] Allowed origins:`, allowedOrigins);
@@ -39,12 +44,25 @@ console.log(`[CORS] ALLOWED_ORIGINS env var:`, process.env.ALLOWED_ORIGINS);
 app.use(
   cors({
     origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      console.log(`[CORS] Request from origin:`, origin);
+      // Log the origin for debugging
+      if (origin) {
+        console.log(`[CORS] Request from origin:`, origin);
+      } else {
+        console.log(`[CORS] Request with no origin header (likely from Postman/curl/server-to-server)`);
+      }
+      
+      // Allow requests with no origin (Postman, curl, server-to-server, same-origin)
+      // Browsers will always send Origin header for cross-origin requests
+      // Server-to-server requests don't need CORS, so undefined origin is safe
       if (allowedOrigins.includes("*") || !origin || allowedOrigins.includes(origin)) {
-        console.log(`[CORS] Allowing origin:`, origin);
+        if (origin) {
+          console.log(`[CORS] ✅ Allowing origin:`, origin);
+        } else {
+          console.log(`[CORS] ✅ Allowing request (no origin header)`);
+        }
         callback(null, true);
       } else {
-        console.log(`[CORS] Rejecting origin:`, origin, `(not in allowed list:`, allowedOrigins, `)`);
+        console.log(`[CORS] ❌ Rejecting origin:`, origin, `(not in allowed list:`, allowedOrigins, `)`);
         callback(new Error("Not allowed by CORS"));
       }
     },
