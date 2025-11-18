@@ -10,39 +10,6 @@ import { apiKey, serverClient } from "./serverClient";
 
 const app = express();
 
-
-// Load allowed origins from env, default to chromiai.com
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(",").map((o) => o.trim())
-  : ["https://chromiai.com"];
-
-console.log("[CORS] Allowed origins:", allowedOrigins);
-
-app.use(
-  cors({
-    origin: (origin: string | undefined, callback: (err: Error | null, allow: boolean) => void) => {
-      console.log("[CORS] Incoming request from:", origin);
-
-      // Allow requests with no origin (server-to-server or curl)
-      if (!origin) return callback(null, true);
-
-      // Check if the origin is allowed
-      if (allowedOrigins.includes(origin)) {
-        console.log("[CORS] Allowed origin:", origin);
-        callback(null, true);
-      } else {
-        console.log("[CORS] Rejected origin:", origin);
-        callback(new Error("Not allowed by CORS"), false);
-      }
-    },
-    credentials: true, // allow cookies/auth headers
-    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"], // allowed HTTP methods
-    allowedHeaders: ["Content-Type", "Authorization"], // allowed headers
-    preflightContinue: false, // let CORS handle OPTIONS preflight
-    optionsSuccessStatus: 204, // response for successful OPTIONS requests
-  })
-);
-
 // Production security middleware allowed
 app.use(helmet({
   contentSecurityPolicy: {
@@ -56,6 +23,34 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false, // Allow Stream Chat iframes
 }));
 
+// CORS configuration - allow specific origins in production
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(",").map((origin) => origin.trim())
+  : ["*"]; // Fallback to * for development
+
+// Always include chromiai.com in allowed origins
+if (!allowedOrigins.includes("*") && !allowedOrigins.includes("https://chromiai.com")) {
+  allowedOrigins.push("https://chromiai.com");
+}
+
+console.log(`[CORS] Allowed origins:`, allowedOrigins);
+console.log(`[CORS] ALLOWED_ORIGINS env var:`, process.env.ALLOWED_ORIGINS);
+
+app.use(
+  cors({
+    origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
+      console.log(`[CORS] Request from origin:`, origin);
+      if (allowedOrigins.includes("*") || !origin || allowedOrigins.includes(origin)) {
+        console.log(`[CORS] Allowing origin:`, origin);
+        callback(null, true);
+      } else {
+        console.log(`[CORS] Rejecting origin:`, origin, `(not in allowed list:`, allowedOrigins, `)`);
+        callback(new Error("Not allowed by CORS"));
+      }
+    },
+    credentials: true,
+  })
+);
 
 
 // Response compression for better performance
