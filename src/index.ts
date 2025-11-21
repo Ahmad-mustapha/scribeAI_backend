@@ -98,6 +98,20 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const aiAgentCache = new Map<string, AIAgent>();
 const pendingAiAgents = new Set<string>();
 
+// Timeout utility function
+const withTimeout = <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  errorMessage: string
+): Promise<T> => {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+    ),
+  ]);
+};
+
 // TODO: temporary set to 8 hours, should be cleaned up at some point
 const inactivityThreshold = 480 * 60 * 1000;
 // Periodically check for inactive AI agents and dispose of them
@@ -163,6 +177,7 @@ app.post("/start-ai-agent", async (req: Request, res: Response) => {
       const channel = serverClient.channel(channel_type, channel_id);
       await channel.addMembers([user_id]);
 
+      console.log(`[API] Creating agent instance for ${user_id}...`);
       const agent = await createAgent(
         user_id,
         AgentPlatform.GEMINI,
@@ -171,7 +186,13 @@ app.post("/start-ai-agent", async (req: Request, res: Response) => {
       );
 
       console.log(`[API] Initializing agent for ${user_id}...`);
-      await agent.init();
+      // Use a longer timeout (15 seconds) for initialization
+      const INIT_TIMEOUT_MS = 15000;
+      await withTimeout(
+        agent.init(),
+        INIT_TIMEOUT_MS,
+        `Agent initialization timeout of ${INIT_TIMEOUT_MS}ms exceeded`
+      );
       console.log(`[API] Agent initialized successfully for ${user_id}`);
       
       // Final check to prevent race conditions where an agent might have been added

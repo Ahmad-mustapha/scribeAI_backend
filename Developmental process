@@ -1,0 +1,194 @@
+# Production Deployment Guide
+
+This document outlines the production optimizations and deployment considerations for the backend server.
+
+## Production Optimizations Implemented
+
+### 1. Security Enhancements
+- **Helmet.js**: Adds security headers (XSS protection, content security policy, etc.)
+- **CORS Configuration**: Configurable allowed origins via `ALLOWED_ORIGINS` environment variable
+- **Request Size Limits**: Body parser limits set to 10MB to prevent DoS attacks
+- **Rate Limiting**: Prevents abuse with configurable request limits
+
+### 2. Performance Optimizations
+- **Response Compression**: Gzip compression for all responses to reduce bandwidth
+- **Request Body Limits**: Prevents memory exhaustion from large payloads
+
+### 3. Reliability Features
+- **Graceful Shutdown**: Properly handles SIGTERM/SIGINT signals to clean up resources
+- **Error Handling**: Centralized error handling middleware
+- **Health Check Endpoint**: `/health` endpoint for monitoring
+- **Environment Validation**: Validates required environment variables at startup
+
+### 4. Monitoring & Observability
+- **Health Check**: `/health` endpoint returns server status, uptime, and active agents
+- **Structured Logging**: Console logs with clear prefixes for easier debugging
+
+## Environment Variables
+
+### Required Variables
+```env
+STREAM_API_KEY=your_stream_api_key
+STREAM_API_SECRET=your_stream_api_secret
+API_KEY=your_gemini_api_key
+```
+
+### Optional Variables
+```env
+# Server Configuration
+PORT=3000
+
+
+# CORS Configuration (comma-separated list)
+ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
+
+# Rate Limiting
+RATE_LIMIT_MAX=100  # Max requests per 15 minutes per IP
+
+# Gemini Configuration (optional, has defaults)
+GEMINI_MODEL=gemini-2.5-flash
+GUESTS_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODEL=gemini-2.5-pro
+MAX_OUTPUT_TOKENS=2048
+GEMINI_MAX_RETRIES=2
+GEMINI_RETRY_DELAY_MS=500
+GEMINI_HISTORY_LIMIT=10
+
+# Database (if using MongoDB)
+MONGO_URI=mongodb://localhost:27017/yourdb
+
+# Tavily API (for web search tool)
+TAVILY_API_KEY=your_tavily_api_key
+```
+
+## Deployment Checklist
+
+### Before Deployment
+- [ ] Set `NODE_ENV=production` in your environment
+- [ ] Configure `ALLOWED_ORIGINS` with your frontend domain(s)
+- [ ] Set appropriate `RATE_LIMIT_MAX` based on expected traffic
+- [ ] Ensure all required environment variables are set
+- [ ] Test the `/health` endpoint
+- [ ] Verify graceful shutdown works correctly
+
+### Installation
+```bash
+cd backend
+npm install
+npm run start
+```
+
+### Production Build
+The `npm start` command compiles TypeScript and runs the server:
+```bash
+npm start
+```
+
+### Process Management
+For production, use a process manager like PM2:
+```bash
+npm install -g pm2
+pm2 start dist/index.js --name "ai-chat-backend"
+pm2 save
+pm2 startup
+```
+
+### Docker Deployment (Optional)
+Create a `Dockerfile`:
+```dockerfile
+FROM node:20-alpine
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY dist ./dist
+EXPOSE 3000
+CMD ["node", "dist/index.js"]
+```
+
+## Health Check
+
+The `/health` endpoint returns:
+```json
+{
+  "status": "healthy",
+  "timestamp": "2024-01-01T00:00:00.000Z",
+  "uptime": 3600,
+  "activeAgents": 5,
+  "pendingAgents": 0
+}
+```
+
+Use this endpoint for:
+- Load balancer health checks
+- Monitoring systems
+- Container orchestration (Kubernetes liveness/readiness probes)
+
+## Rate Limiting
+
+Default: 100 requests per 15 minutes per IP address.
+
+To customize, set `RATE_LIMIT_MAX` environment variable. The health check endpoint (`/health`) is excluded from rate limiting.
+
+## CORS Configuration
+
+In production, set `ALLOWED_ORIGINS` to your frontend domain(s):
+```env
+ALLOWED_ORIGINS=https://yourdomain.com,https://www.yourdomain.com
+```
+
+For development, if `ALLOWED_ORIGINS` is not set, it defaults to `*` (all origins).
+
+## Graceful Shutdown
+
+The server handles:
+- `SIGTERM` (used by process managers and containers)
+- `SIGINT` (Ctrl+C)
+- Uncaught exceptions
+- Unhandled promise rejections
+
+On shutdown, the server will:
+1. Stop accepting new connections
+2. Dispose all active AI agents
+3. Clean up resources
+4. Exit gracefully
+
+Shutdown timeout: 30 seconds (forced exit if cleanup takes too long)
+
+## Monitoring Recommendations
+
+1. **Uptime Monitoring**: Use the `/health` endpoint
+2. **Error Tracking**: Monitor logs for error patterns
+3. **Performance**: Track response times and active agents
+4. **Resource Usage**: Monitor memory and CPU usage
+5. **Rate Limiting**: Track rate limit hits to identify abuse
+
+## Security Best Practices
+
+1. **Never commit `.env` files** to version control
+2. **Use HTTPS** in production (configure at reverse proxy/load balancer level)
+3. **Rotate API keys** regularly
+4. **Monitor rate limit violations** for potential attacks
+5. **Keep dependencies updated** (`npm audit` regularly)
+6. **Use environment-specific configurations** (dev/staging/prod)
+
+## Troubleshooting
+
+### Server won't start
+- Check that all required environment variables are set
+- Verify port is not already in use
+- Check logs for specific error messages
+
+### High memory usage
+- Check number of active agents
+- Review inactivity threshold (currently 8 hours)
+- Consider reducing `MAX_HISTORY_LENGTH` if using MongoDB
+
+### Rate limiting issues
+- Adjust `RATE_LIMIT_MAX` if legitimate users are being blocked
+- Consider implementing per-user rate limiting for authenticated endpoints
+
+### CORS errors
+- Verify `ALLOWED_ORIGINS` includes your frontend domain
+- Check that credentials are properly configured
+- Ensure frontend is sending correct `Origin` header
+
